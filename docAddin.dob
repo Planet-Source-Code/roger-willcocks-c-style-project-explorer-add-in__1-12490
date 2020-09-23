@@ -1,0 +1,1351 @@
+VERSION 5.00
+Object = "{831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.0#0"; "Mscomctl.ocx"
+Begin VB.UserDocument docAddin 
+   ClientHeight    =   885
+   ClientLeft      =   0
+   ClientTop       =   0
+   ClientWidth     =   2145
+   HScrollSmallChange=   225
+   ScaleHeight     =   885
+   ScaleWidth      =   2145
+   VScrollSmallChange=   225
+   Begin MSComctlLib.ImageList ImageList1 
+      Left            =   480
+      Top             =   825
+      _ExtentX        =   1005
+      _ExtentY        =   1005
+      BackColor       =   -2147483643
+      ImageWidth      =   16
+      ImageHeight     =   16
+      MaskColor       =   12632256
+      _Version        =   393216
+      BeginProperty Images {2C247F25-8591-11D1-B16A-00C0F0283628} 
+         NumListImages   =   4
+         BeginProperty ListImage1 {2C247F27-8591-11D1-B16A-00C0F0283628} 
+            Picture         =   "docAddin.dox":0000
+            Key             =   ""
+         EndProperty
+         BeginProperty ListImage2 {2C247F27-8591-11D1-B16A-00C0F0283628} 
+            Picture         =   "docAddin.dox":0552
+            Key             =   ""
+         EndProperty
+         BeginProperty ListImage3 {2C247F27-8591-11D1-B16A-00C0F0283628} 
+            Picture         =   "docAddin.dox":0AA4
+            Key             =   ""
+         EndProperty
+         BeginProperty ListImage4 {2C247F27-8591-11D1-B16A-00C0F0283628} 
+            Picture         =   "docAddin.dox":9E2E
+            Key             =   ""
+         EndProperty
+      EndProperty
+   End
+   Begin VB.CommandButton cmdForm 
+      Enabled         =   0   'False
+      Height          =   405
+      Left            =   495
+      Picture         =   "docAddin.dox":A280
+      Style           =   1  'Graphical
+      TabIndex        =   4
+      TabStop         =   0   'False
+      Top             =   60
+      Width           =   405
+   End
+   Begin VB.CommandButton cmdCode 
+      Enabled         =   0   'False
+      Height          =   405
+      Left            =   90
+      Picture         =   "docAddin.dox":A7C2
+      Style           =   1  'Graphical
+      TabIndex        =   3
+      TabStop         =   0   'False
+      Top             =   60
+      Width           =   405
+   End
+   Begin VB.CheckBox chkVariables 
+      Caption         =   "Variables"
+      Height          =   180
+      Left            =   1020
+      TabIndex        =   1
+      Top             =   240
+      Width           =   1065
+   End
+   Begin VB.CheckBox chkConst 
+      Caption         =   "Constants"
+      Height          =   180
+      Left            =   1020
+      TabIndex        =   0
+      Top             =   45
+      Width           =   1080
+   End
+   Begin MSComctlLib.TreeView treMain 
+      Height          =   300
+      Left            =   -15
+      TabIndex        =   2
+      Top             =   495
+      Width           =   2130
+      _ExtentX        =   3757
+      _ExtentY        =   529
+      _Version        =   393217
+      Indentation     =   18
+      LabelEdit       =   1
+      LineStyle       =   1
+      Style           =   6
+      BorderStyle     =   1
+      Appearance      =   1
+   End
+End
+Attribute VB_Name = "docAddin"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = True
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = True
+Option Explicit
+
+
+Private d_x As Single
+Private d_y As Single
+Private d_x2 As Single
+Private d_y2 As Single
+Private b_clicked As Boolean
+
+Public WithEvents compEvents As VBIDE.VBComponentsEvents
+Attribute compEvents.VB_VarHelpID = -1
+Public WithEvents projEvents As VBIDE.VBProjectsEvents
+Attribute projEvents.VB_VarHelpID = -1
+Private WithEvents c_menu As cPopupMenu
+Attribute c_menu.VB_VarHelpID = -1
+
+Public VBInstance As VBIDE.VBE
+Public Connect As dCodeValidator
+
+Private tNodes As MSComctlLib.Nodes
+
+Public nodeRoot As MSComctlLib.Node ' Root Node - Code File Name
+Private nodeStart As MSComctlLib.Node ' Func/Sub/Property in Code File
+Private nodeLine As MSComctlLib.Node ' Code element - If/Do/While/etc
+
+Private inStack As clsStack
+Private outStack As clsStack
+Public d_components As VBA.Collection
+Public Enum useColors
+    defaultColor = vbBlack
+    errcolor = vbRed
+    endColor = &HC0C0C0
+    dimColor = vbWhite / 2
+    constColor = &H606060
+    compilerColor = vbCyan
+    startColor = vbBlue
+End Enum
+
+Public Type NMHDR
+    hwndFrom As Long
+    idfrom As Long
+    code As Long
+End Type
+
+Private Type NMCUSTOMDRAW
+    hdr As NMHDR
+    dwDrawStage As Long
+    hdc As Long
+    rc As RECT
+    dwItemSpec As Long ' this is control specific, but it's how to specify an item.  valid only with CDDS_ITEM bit set
+    uItemState As Long
+    lItemlParam As Long
+End Type
+
+
+Private Type NMTVCUSTOMDRAW
+    nmcd As NMCUSTOMDRAW
+    clrText As Long
+    clrTextBk As Long
+#If (WIN32_IE >= &H400) Then
+    iLevel As Long
+#End If
+End Type
+
+' CustomDraw paint stages.
+Private Const CDDS_PREPAINT = &H1
+Private Const CDDS_POSTPAINT = &H2
+Private Const CDDS_PREERASE = &H3
+Private Const CDDS_POSTERASE = &H4
+Private Const CDDS_ITEMPREPAINT = (&H10000 Or &H1)
+Private Const CDDS_ITEMPOSTPAINT = (&H10000 Or &H2)
+Private Const CDDS_ITEM = &H10000
+Private Const CDDS_SUBITEM = &H20000
+
+Private Const NM_CUSTOMDRAW = (&HFFFF - 11)
+
+' CustomDraw return values.
+Private Const CDRF_DODEFAULT = &H0
+Private Const CDRF_NEWFONT = &H2
+Private Const CDRF_SKIPDEFAULT = &H4
+Private Const CDRF_NOTIFYPOSTPAINT = &H10
+Private Const CDRF_NOTIFYITEMDRAW = &H20
+Private Const CDRF_NOTIFYPOSTERASE = &H40
+Private Const CDRF_NOTIFYSUBITEMDRAW = &H20
+Private Const WM_NOTIFY = &H4E
+
+Implements ISubclass
+
+Private Function CustomDraw(ByVal lParam As Long) As Long
+Dim NMTVCD As NMTVCUSTOMDRAW
+Dim lLen As Long
+   
+   ' Get the CustomDraw data.
+   lLen = Len(NMTVCD)
+   
+   CopyMemory NMTVCD, ByVal lParam, lLen
+   
+   Select Case NMTVCD.nmcd.dwDrawStage
+   Case CDDS_PREPAINT
+       ' Tell it we want to be told when an item is drawn.
+       CustomDraw = CDRF_NOTIFYSUBITEMDRAW
+       Debug.Print "Prepaint set"
+
+   Case CDDS_ITEMPREPAINT
+    Debug.Print NMTVCD.nmcd.uItemState
+       If True Then
+            CustomDraw = CDRF_DODEFAULT
+        Else
+            CustomDraw = CDRF_SKIPDEFAULT
+        End If
+   End Select
+End Function
+
+
+Private Sub ClearOutStack(treeKey As String)
+Dim parentNode As MSComctlLib.Node
+With outStack
+    While .Count > 0
+        Set parentNode = nodeStart.Parent
+        If Not left$(parentNode.Key, 5) = "Type~" Then
+            Set nodeStart = parentNode
+        End If
+        addLine .Pop, String(.Count, "_") & treeKey, errcolor
+    Wend
+End With
+End Sub
+
+Private Function GetNodeType(VBComponent As VBIDE.VBComponent) As String
+
+    GetNodeType = "Unknown"
+    On Error Resume Next
+    Select Case VBComponent.Type
+    Case vbext_ct_ClassModule:
+        GetNodeType = "Class Modules"
+    Case vbext_ct_DocObject:
+        GetNodeType = "User documents"
+    Case vbext_ct_MSForm:
+        GetNodeType = "Forms"
+    Case vbext_ct_PropPage:
+        GetNodeType = "Property Pages"
+    Case vbext_ct_RelatedDocument:
+        GetNodeType = "Related Documents"
+    Case vbext_ct_StdModule:
+        GetNodeType = "Modules"
+    Case vbext_ct_UserControl:
+        GetNodeType = "User controls"
+    Case vbext_ct_VBForm:
+        GetNodeType = "Forms"
+    Case vbext_ct_VBMDIForm:
+        GetNodeType = "Forms"
+    Case vbext_ct_ResFile:
+        GetNodeType = "Resource Files"
+    Case vbext_ct_ActiveXDesigner:
+        GetNodeType = "Designers"
+    Case Else
+        GetNodeType = "Unknown"
+    End Select
+    Err.Clear
+    On Error GoTo 0
+End Function
+
+Public Sub Reload()
+'load the tree with the module name, and the code (up to 10,000,000 lines)
+Dim VBComponent As VBIDE.VBComponent
+Dim VBProject As VBIDE.VBProject
+Dim aNode As MSComctlLib.Node
+Dim nodetype As String
+
+If tNodes Is Nothing Then
+    Set tNodes = treMain.Nodes
+End If
+On Error Resume Next
+    If Connect.mdocAddIn Is Nothing Then
+        Exit Sub
+    End If
+    Set Connect.mdocAddIn.compEvents = VBInstance.Events.VBComponentsEvents(VBInstance.ActiveVBProject)
+    Set Connect.mdocAddIn.projEvents = VBInstance.Events.VBProjectsEvents
+On Error GoTo 0
+treMain.Visible = False
+treMain.Sorted = False
+Set d_components = New Collection
+If Not VBInstance Is Nothing Then
+    tNodes.Clear
+    For Each VBProject In VBInstance.VBProjects
+        AddProject VBProject
+    Next
+End If
+treMain.Visible = True
+End Sub
+
+Private Sub AddProject(VBProject As VBIDE.VBProject)
+Dim aNode As MSComctlLib.Node
+Dim VBComponent As VBIDE.VBComponent
+Dim nodetype As String
+Dim ProjectName As String
+    If Not VBProject.VBComponents Is Nothing Then
+        ProjectName = VBProject.Name
+        On Error Resume Next
+        Set aNode = tNodes.Add(, , "Project~" & ProjectName, ProjectName, 1, 1)
+        If Err.Number <> 0 Then
+            Set aNode = tNodes("Project~" & ProjectName)
+            Err.Clear
+        End If
+        For Each VBComponent In VBProject.VBComponents
+            AddComponent GetComponentName(VBComponent), GetNodeType(VBComponent), ProjectName
+        Next
+    End If
+    On Error Resume Next
+    If ProjectName = VBInstance.VBProjects.StartProject.Name Then
+        tNodes("Project~" & ProjectName).Bold = True
+    End If
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+
+Public Sub LoadData(strComponent As String, strData As String)
+Dim fileLines As Variant
+
+Dim curLine As CodeValidator.perLine
+Dim parentNode As MSComctlLib.Node
+Dim index2 As Long
+Dim index As Long
+Dim length As Long
+
+Dim indexLine As String
+Dim fileContent As String
+Dim treeKey As String
+Dim aLine As String
+
+Dim b_consts As Boolean
+Dim b_vars As Boolean
+
+If tNodes Is Nothing Then
+    Set tNodes = treMain.Nodes
+End If
+
+b_vars = (chkVariables.Value <> 0)
+b_consts = (chkConst.Value <> 0)
+Debug.Print "Start Process: " & Now()
+
+fileContent = strData
+fileContent = Replace(fileContent, vbTab, " ", , , vbBinaryCompare)
+While InStr(fileContent, "    ") > 0
+    fileContent = Replace(fileContent, "    ", " ", , , vbBinaryCompare)
+Wend
+While InStr(fileContent, "  ") > 0
+    fileContent = Replace(fileContent, "  ", " ", , , vbBinaryCompare)
+Wend
+
+fileLines = Split(fileContent, vbCrLf, , vbBinaryCompare)
+fileContent = vbNullString
+'addRoot strComponent
+Set inStack = New clsStack
+Set outStack = New clsStack
+For index2 = UBound(fileLines) To LBound(fileLines) Step -1
+    aLine = Trim$(fileLines(index2))
+    If left$(aLine, 1) = "'" Then
+'remove comments to condense the code, comment the following
+'line out to leave comments in
+        aLine = vbNullString
+    ElseIf LCase$(left$(aLine, 4)) = "rem " Then
+'remove comments to condense the code, comment the following
+'line out to leave comments in
+        aLine = vbNullString
+    Else
+        On Error Resume Next
+        If right$(fileLines(index2 - 1), 1) = "_" Then
+            Mid$(fileLines(index2 - 1), Len(fileLines(index2 - 1)), 1) = " "
+        'because someone might put a line continuation on the last line
+        'of a module, and cause a crash otherwise
+            fileLines(index2 - 1) = fileLines(index2 - 1) & aLine
+            If Err.Number = 0 Then
+                fileLines(index2) = vbNullString
+                aLine = vbNullString
+                'inStack.Pop
+            Else
+                Err.Clear
+            End If
+        End If
+        On Error GoTo 0
+        fileContent = Replace(aLine, """""", "  ", , , vbBinaryCompare) 'remove all double quotes as they are not useful
+        fileContent = Replace(fileContent, ":=", "  ", , , vbBinaryCompare) 'remove all := as they are not useful
+        index = InStr(1, fileContent, """", vbBinaryCompare)
+        If index > 0 Then   'eliminate all quoted sections as they might confuse the parser
+            length = InStr(index + 1, fileContent, """", vbBinaryCompare)
+            Do While length > 0
+                length = length + 1 - index
+                Mid$(fileContent, index, length) = Space(length) 'do this to keep the same length/positions
+                'as the original string, makes other processing easier
+                index = InStr(index + length, fileContent, """", vbBinaryCompare)
+                If index < 1 Then
+                    Exit Do
+                End If
+                length = InStr(index + 1, fileContent, """", vbBinaryCompare) 'actually pos in string at this point
+            Loop
+        End If
+        If InStr(fileContent, "'") > 0 Then
+            fileContent = left$(fileContent, InStr(1, fileContent, "'", vbBinaryCompare) - 1)
+        End If
+        If IsNumeric(left$(fileContent, 1)) Then
+            'line is labelled with a row number, we need to replace with spaces
+            index = InStr(1, fileContent, " ", vbBinaryCompare)
+            If index > 0 Then
+                fileContent = Space(index - 1) & Mid$(fileContent, index)
+            End If
+        End If
+        fileContent = LCase$(fileContent)
+        If Not b_consts Then
+            If left$(fileContent, 6) = "const " Then
+                aLine = vbNullString
+            ElseIf InStr(fileContent, " const ") > 0 Then
+                aLine = vbNullString
+            End If
+        End If
+        'now we have removed all the strings "hello" from the line
+        'eliminating the risk of errors caused by circumstances like
+        'If x = "then" Then
+    
+        If Len(aLine) > 0 Then
+        'add to stack, otherwise ignore it
+            With curLine
+                .lineID = index2
+                .lineContent = aLine
+                .lcaseContent = LCase$(fileContent)
+            End With
+            inStack.Push curLine
+        End If
+    End If
+Next
+Debug.Print "Start Add/End Process: " & Now()
+Set nodeStart = nodeRoot
+fileLines = vbNullString
+With outStack
+While inStack.Count > 0
+    curLine = inStack.Pop()
+    With curLine
+        fileContent = .lcaseContent & " "
+        aLine = .lineContent & " "
+        indexLine = .lineID
+        index = InStr(1, fileContent, ":", vbBinaryCompare)
+        If index > 0 Then
+            If index < Len(fileContent) Then
+            'here we have a problem, need to change contents of curLine and
+            'replace on stack
+                fileContent = left$(fileContent, index - 1) & " "
+                aLine = left$(aLine, InStr(1, aLine, ":", vbBinaryCompare) - 1) & " "
+                index = index + 1
+                .lcaseContent = Mid$(.lcaseContent, index)
+                .lineContent = Mid$(.lineContent, index)
+                .lineID = "@~" & .lineID
+                If Len(.lineContent) > 1 Then
+                    inStack.Push curLine
+                End If
+            Else    'was a line label only
+                'just continue with it
+            End If
+        End If
+    End With
+    treeKey = strComponent & "@" & indexLine
+    Set parentNode = nodeStart.Parent
+    Select Case left$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) - 1)
+    Case "for":
+        'no need to find second word on line, starts new sub section
+        addStartSection aLine, treeKey
+        .Push "next"
+    Case "do":
+        'no need to find second word on line, starts new sub section
+        addStartSection aLine, treeKey
+        .Push "loop"
+    Case "dim", "static", "global":
+        'no need to find second word on line, starts new sub section
+        fileContent = Mid$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) + 1) & " "
+        fileContent = left$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) - 1)
+        Select Case fileContent
+        Case "const":
+            If b_consts Then
+                addLine aLine, treeKey, constColor
+            End If
+        Case Else
+            If b_vars Then
+                addLine aLine, treeKey, dimColor
+            End If
+        End Select
+    Case "const":
+        'no need to find second word on line, starts new sub section
+        If b_consts Then
+            addLine aLine, treeKey, constColor
+        End If
+    Case "while":
+        'no need to find second word on line, starts new sub section
+        addStartSection aLine, treeKey
+        .Push "wend"
+    Case "if":
+        'no need to find second word on line, starts new sub section
+        'may be a single line if statement
+        fileContent = Mid$(fileContent, InStrRev(fileContent, "then", , vbBinaryCompare) + 4)
+        fileContent = Trim$(fileContent)
+        If Len(fileContent) < 1 Then
+            ' was a multi line if, so we need to track it
+            addStartSection aLine, treeKey
+            .Push "end if"
+        Else
+            addLine aLine, treeKey, startColor
+        End If
+    Case "#if":
+        'no need to find second word on line, starts new sub section
+        'may be a single line if statement
+        fileContent = Mid$(fileContent, InStrRev(fileContent, "then", , vbBinaryCompare) + 4)
+        fileContent = Trim$(fileContent)
+        If Len(fileContent) < 1 Then
+            ' was a multi line if, so we need to track it
+            addStartSection aLine, treeKey, compilerColor
+            .Push "#end if"
+        Else
+            addLine aLine, treeKey, compilerColor
+        End If
+    Case "with":
+        'no need to find second word on line, starts new sub section
+        addStartSection aLine, treeKey
+        .Push "end with"
+    Case "select":
+        'no need to find second word on line, starts new sub section
+        addStartSection aLine, treeKey, vbBlack
+        .Push "end select"
+    Case "declare":
+        'no need to find second word on line, makes a Declare statement
+        addLine aLine, treeKey
+    Case "implements":
+        'no need to find second word on line, makes a Declare statement
+        addLine aLine, treeKey, compilerColor
+    Case "begin":
+        'no need to find second word on line, starts new sub section
+        addStartSection aLine, treeKey
+        .Push "end "
+    Case "sub", "function", "property":
+        'no need to find second word on line, starts new main section
+        'first make the stack empty
+        With outStack
+            ClearOutStack treeKey
+            Set nodeStart = nodeRoot
+            addStartSection aLine, treeKey
+            fileContent = left$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) - 1)
+            .Push "end " & fileContent
+        End With
+    Case "enum", "type":
+        'no need to find second word on line, starts new main section
+        
+        'first make the stack empty
+        With outStack
+            ClearOutStack treeKey
+            Set nodeStart = nodeRoot
+            addStartSection aLine, treeKey, constColor
+            fileContent = left$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) - 1)
+            .Push "end " & fileContent
+        End With
+    Case "public", "private", "friend":
+        'need to check second word to tell if it starts a new section, or just a line
+        fileContent = Mid$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) + 1) & " "
+        fileContent = left$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) - 1)
+        Select Case fileContent
+        Case "enum", "type":
+            .Push "end " & fileContent
+            addStartSection aLine, treeKey, constColor
+        Case "sub", "function", "property":
+        'first make the stack empty
+            With outStack
+                ClearOutStack treeKey
+                .Push "end " & fileContent
+            End With
+            addStartSection aLine, treeKey, startColor
+        Case "declare":
+            addLine aLine, treeKey
+        Case "const":
+            If b_consts Then addLine aLine, treeKey, constColor
+        Case "static", "withevents":
+            If b_vars Then addLine aLine, treeKey, dimColor
+        Case vbNullString:
+        Case Else
+            If b_vars Then addLine aLine, treeKey, dimColor
+        End Select
+    Case "end":
+        'end of a section - need to find what sort - depends on second word
+        fileContent = Mid$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) + 1) & " "
+        fileContent = left$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) - 1)
+        If .top <> "end " & fileContent Then
+            If fileContent = vbNullString Then 'And .Top <> "end "
+                addLine aLine, treeKey
+            Else
+                addLine "NO START " & fileContent, "I" & treeKey, errcolor
+            End If
+        Else
+            .Pop
+            If Not left$(parentNode.Key, 5) = "Type~" Then
+                Set nodeStart = parentNode
+            End If
+            'addLine aLine, treekey, endColor
+        End If
+    Case "loop":
+        'end of a section
+        If .top <> "loop" Then
+            addLine "NO START DO", "L" & treeKey, errcolor
+        Else
+            .Pop
+            If Not left$(parentNode.Key, 5) = "Type~" Then
+                Set nodeStart = parentNode
+            End If
+            'addLine aLine, treekey, endColor
+        End If
+   Case "next":
+        'end of a section
+        If .top <> "next" Then
+            addLine "NO START FOR", "N" & treeKey, errcolor
+        Else
+            ' we have to allow for case "Next i, j"
+            ' thanks for pointing this out Ulli :)
+            fileContent = Trim$(Mid$(fileContent, InStr(1, fileContent, " ", vbBinaryCompare) + 1))
+            If Len(fileContent) > 0 Then
+                'we have items in here, ie next i, or next i, j
+                fileLines = Split(fileContent, ",", , vbBinaryCompare)
+            Else
+                fileLines = Split(" ", ",", , vbBinaryCompare)
+            End If
+            For index = LBound(fileLines) To UBound(fileLines)
+                If Not left$(parentNode.Key, 5) = "Type~" Then
+                    Set nodeStart = parentNode
+                End If
+                If .top = "next" Then
+                    .Pop
+                Else
+                    addLine "ERROR NEXT STATEMENT NESTING", String(index, "_") & treeKey, errcolor
+                End If
+            Next
+            'addLine aLine, treekey, endColor
+        End If
+    Case "wend":
+        'end of a section
+        If .top <> "wend" Then
+            addLine "NO START WHILE", "WE" & treeKey, errcolor
+        Else
+            .Pop
+            If Not left$(parentNode.Key, 5) = "Type~" Then
+                Set nodeStart = parentNode
+            End If
+            'addLine aLine, treekey, endColor
+        End If
+    Case "#end":
+        'end of a compiler section
+        If .top <> "#end if" Then
+            addLine "NO START #IF", "#I" & treeKey, errcolor
+        Else
+            .Pop
+            If Not left$(parentNode.Key, 5) = "Type~" Then
+                Set nodeStart = parentNode
+            End If
+            addLine aLine, treeKey, compilerColor
+        End If
+    Case "case":
+        'both begins and ends a section
+        'effectively equivalent to 'end select' in outStack
+        'but is left on the stack (as is also equivalent to 'select case')
+        If .top <> "end select" Then
+            addLine "NO START SELECT", "S" & treeKey, errcolor
+        Else
+            '.Pop
+            If Not left$(parentNode.Key, 5) = "Type~" Then
+                Set nodeStart = parentNode
+            End If
+            addStartSection aLine, treeKey
+        End If
+    Case "else", "elseif":
+        'both begins and ends a section
+        'effectively equivalent to 'end if' in outStack
+        'but are left on the stack (as is also equivalent to 'if x then')
+        If .top <> "end if" Then
+            addLine "NO START IF", "I" & treeKey, errcolor
+        Else
+            '.Pop
+            If Not left$(parentNode.Key, 5) = "Type~" Then
+                Set nodeStart = parentNode
+            End If
+            addStartSection aLine, treeKey
+        End If
+    Case "#else", "#elseif":
+        'both begins and ends a section
+        'effectively equivalent to 'end if' in outStack
+        'but are left on the stack (as is also equivalent to 'if x then')
+        If .top <> "#end if" Then
+            addLine "NO START #IF", "#I" & treeKey, errcolor
+        Else
+            If Not left$(parentNode.Key, 5) = "Type~" Then
+                Set nodeStart = parentNode
+            End If
+            addStartSection aLine, treeKey, compilerColor
+        End If
+    Case "option":
+        addLine aLine, treeKey
+    Case Else
+        If left$(aLine, 1) = "#" Then
+            addLine aLine, treeKey, compilerColor
+'inside a type or enum, could do as a different colour
+        'ElseIf .Top = "end enum" Then
+        '    addLine aLine, treeKey
+        'ElseIf .Top = "end type" Then
+        '    addLine aLine, treeKey
+        Else
+            addLine aLine, treeKey
+        End If
+    End Select
+Wend
+End With
+index = indexLine + 1
+ClearOutStack treeKey
+Debug.Print "End Add: " & Now()
+End Sub
+
+
+' ***************************************************
+'Tree Node Code
+
+Private Sub addStartSection(strline As String, line As String, Optional lineColor As CodeValidator.useColors = startColor)
+' Adds the header of a code element to the treenode - ie While x < 100
+If nodeStart Is Nothing Then
+    Exit Sub
+End If
+Dim title As String
+    If Len(strline) > 50 Then
+        title = left$(strline, 47) & "..."
+    Else
+        title = strline
+    End If
+    Set nodeStart = tNodes.Add(nodeStart, tvwChild, "S" & line, title)
+    With nodeStart
+    If Len(title) = 50 Then
+        .Tag = left$(strline, 150)
+    End If
+    .ForeColor = lineColor
+    If lineColor = errcolor Then
+        .EnsureVisible
+    End If
+    End With
+End Sub
+Private Sub addLine(strline As String, line As String, Optional lineColor As CodeValidator.useColors = defaultColor)
+'add a normal line of code (or close element wend/loop/etc) to the tree
+If nodeStart Is Nothing Then
+    Exit Sub
+End If
+Dim title As String
+    If Len(strline) > 50 Then
+        title = left$(strline, 47) & "..."
+    Else
+        title = strline
+    End If
+    Set nodeLine = tNodes.Add(nodeStart, tvwChild, "C" & line, title)
+    With nodeLine
+    If Len(title) = 50 Then
+        .Tag = left$(strline, 150)
+    End If
+    'set color based on the passed in parameter
+  .ForeColor = lineColor
+  If lineColor = errcolor Then
+        .EnsureVisible
+  End If
+  End With
+End Sub
+
+
+Private Sub c_menu_Click(ItemNumber As Long)
+Dim menuBar As Object
+Set menuBar = VBInstance.CommandBars.Item("Menu Bar")
+Select Case LCase$(c_menu.ItemKey(ItemNumber))
+Case "projectsave":
+    'file menu
+    menuBar.Controls("File").Controls("Save Project").Execute
+Case "projectsetstartup":
+    tNodes("Project~" & VBInstance.VBProjects.StartProject.Name).Bold = False
+    VBInstance.VBProjects.StartProject = VBInstance.VBProjects(tNodes(c_menu.ItemData(ItemNumber)).Text)
+    tNodes("Project~" & VBInstance.VBProjects.StartProject.Name).Bold = True
+Case "addform":
+        If menuBar.Controls("Project").Controls("Add Form").Enabled Then
+            menuBar.Controls("Project").Controls("Add Form").accDoDefaultAction
+        End If
+Case "addmdiform":
+        If menuBar.Controls("Project").Controls("Add MDI Form").Enabled Then
+            menuBar.Controls("Project").Controls("Add MDI Form").accDoDefaultAction
+        End If
+Case "addmodule":
+        If menuBar.Controls("Project").Controls("Add Module").Enabled Then
+            menuBar.Controls("Project").Controls("Add Module").accDoDefaultAction
+        End If
+Case "addclass":
+        If menuBar.Controls("Project").Controls("Add Class Module").Enabled Then
+            menuBar.Controls("Project").Controls("Add Class Module").accDoDefaultAction
+        End If
+Case "addusercontrol":
+        If menuBar.Controls("Project").Controls("Add User Control").Enabled Then
+            menuBar.Controls("Project").Controls("Add User Control").accDoDefaultAction
+        End If
+Case "addpropertypage":
+        If menuBar.Controls("Project").Controls("Add Property Page").Enabled Then
+            menuBar.Controls("Project").Controls("Add Property Page").accDoDefaultAction
+        End If
+Case "adduserdocument":
+        If menuBar.Controls("Project").Controls("Add User Document").Enabled Then
+            menuBar.Controls("Project").Controls("Add User Document").accDoDefaultAction
+        End If
+Case "object":
+    treMain.SelectedItem = tNodes(c_menu.ItemData(ItemNumber))
+    cmdForm_Click
+Case "properties":
+    MsgBox "Unable to perform as cannot set SelectedVBProperty - Blame MS for this one"
+    Exit Sub
+        If menuBar.Controls("View").Controls("Properties Window").Enabled Then
+            menuBar.Controls("View").Controls("Properties Window").accDoDefaultAction
+        End If
+Case "code":
+    OpenNode tNodes(c_menu.ItemData(ItemNumber))
+Case "remove":
+    If Not VBInstance.VBProjects(Split(tNodes(c_menu.ItemData(ItemNumber)).Key, "~")(1)).VBComponents(Split(tNodes(c_menu.ItemData(ItemNumber)).Key, "~")(0)).IsDirty Then
+        VBInstance.VBProjects(Split(tNodes(c_menu.ItemData(ItemNumber)).Key, "~")(1)).VBComponents.Remove VBInstance.VBProjects(Split(tNodes(c_menu.ItemData(ItemNumber)).Key, "~")(1)).VBComponents(Split(tNodes(c_menu.ItemData(ItemNumber)).Key, "~")(0))
+    Else
+        MsgBox "Must Be Saved First."
+    End If
+Case "hide":
+    Connect.Hide
+Case Else
+    If left$(c_menu.ItemKey(ItemNumber), 5) = "Goto:" Then
+        'is goto line number
+        OpenNode tNodes(Mid$(c_menu.ItemKey(ItemNumber), 6))
+    Else
+        MsgBox "No such item: " & c_menu.ItemKey(ItemNumber)
+    End If
+End Select
+End Sub
+
+Private Sub cmdCode_Click()
+'same as node click, but use selected item
+OpenNode treMain.SelectedItem
+End Sub
+
+Private Sub cmdForm_Click()
+'like node click, but show object instead
+Dim Key As String
+Dim lineID As Long
+Dim index As Long
+Dim theNode As MSComctlLib.Node
+Dim VBComponent As VBIDE.VBComponent
+
+Set theNode = treMain.SelectedItem
+
+Key = theNode.Key
+    On Error Resume Next
+    While Not left$(theNode.Parent.Key, 5) = "Type~"
+        Set theNode = theNode.Parent
+    Wend
+    Err.Clear
+    Key = theNode.Key
+    Set VBComponent = VBInstance.VBProjects(Split(Key, "~")(1)).VBComponents(Split(Key, "~")(0))
+    If Not VBComponent Is Nothing Then
+        VBComponent.Activate
+    End If
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+Private Property Let ISubclass_MsgResponse(ByVal RHS As CodeValidator.EMsgResponse)
+'
+End Property
+
+Private Property Get ISubclass_MsgResponse() As CodeValidator.EMsgResponse
+      ISubclass_MsgResponse = emrPreprocess
+End Property
+
+Private Function ISubclass_WindowProc(ByVal hWnd As Long, ByVal iMsg As Long, ByVal wParam As Long, ByVal lParam As Long) As Long
+'
+Dim tNMH As NMHDR
+    Select Case iMsg
+    ' Handle Menu Select events:
+    Case WM_NOTIFY:
+        CopyMemory tNMH, ByVal lParam, Len(tNMH)
+        Select Case tNMH.code
+        Case NM_CUSTOMDRAW:
+            ISubclass_WindowProc = CustomDraw(lParam)
+        Case Else
+        End Select
+    Case Else
+    
+    End Select
+
+End Function
+
+Private Sub projEvents_ItemActivated(ByVal VBProject As VBIDE.VBProject)
+'do nothing
+End Sub
+
+Private Sub projEvents_ItemAdded(ByVal VBProject As VBIDE.VBProject)
+'
+AddProject VBProject
+End Sub
+
+Private Sub projEvents_ItemRemoved(ByVal VBProject As VBIDE.VBProject)
+'
+treMain.Nodes.Remove treMain.Nodes("Project~" & VBProject.Name).index
+End Sub
+
+Private Sub projEvents_ItemRenamed(ByVal VBProject As VBIDE.VBProject, ByVal OldName As String)
+'
+On Error Resume Next
+treMain.Nodes.Remove treMain.Nodes("Project~" & OldName).index
+Err.Clear
+On Error GoTo 0
+AddProject VBProject
+
+End Sub
+
+Private Sub treMain_Click()
+b_clicked = True
+d_x = d_x2
+d_y = d_y2
+End Sub
+
+Private Sub treMain_DblClick()
+Dim aNode As MSComctlLib.Node
+Dim aProject As VBIDE.VBProject
+
+If Not b_clicked Then
+    Exit Sub
+End If
+
+Set aNode = treMain.HitTest(d_x, d_y)
+If aNode Is Nothing Then
+    b_clicked = False
+    Exit Sub
+End If
+OpenNode aNode
+If VBInstance Is Nothing Then
+    b_clicked = False
+    Exit Sub
+End If
+b_clicked = False
+If VBInstance.ActiveVBProject.Name <> aNode.Root.Text Then
+    For Each aProject In VBInstance.VBProjects
+        If aProject.Name = aNode.Root.Text Then
+            Set VBInstance.ActiveVBProject = aProject
+            Exit For
+        End If
+    Next
+End If
+
+End Sub
+
+Private Sub treMain_Expand(ByVal Node As MSComctlLib.Node)
+Dim Key As String
+Dim VBComponent As VBIDE.VBComponent
+Dim index As Long
+Dim VBProject As VBIDE.VBProject
+
+Key = Node.Key
+index = 0
+If left$(Key, 5) = "Type~" Then
+    'one of the parent types, leave it
+    Exit Sub
+End If
+If left$(Key, 8) = "Project~" Then
+    'one of the projects, leave it
+    Exit Sub
+End If
+While IsNumeric(right$(Key, index + 1))
+    index = index + 1
+Wend
+If index > 0 Then
+    'is inside a node, we don't want to change it
+    Exit Sub
+End If
+While Node.Children > 0
+    tNodes.Remove Node.Child.index
+Wend
+'Key = Mid$(Key, 2, Len(Key) - 2)
+On Error Resume Next
+Set VBComponent = d_components(Key)
+If Split(Key, "~")(1) <> VBInstance.ActiveVBProject.Name Then
+    Set VBInstance.ActiveVBProject = VBInstance.VBProjects(Split(Key, "~")(1))
+End If
+If Err.Number <> 0 Then
+    Err.Clear
+    Set VBProject = VBInstance.VBProjects(Split(Key, "~")(1))
+    Set VBComponent = VBProject.VBComponents(Split(Key, "~")(0))
+    If Not VBComponent Is Nothing Then
+        d_components.Add VBComponent, Key
+    End If
+End If
+On Error GoTo 0
+Set nodeRoot = Node
+treMain.Visible = False
+If VBComponent Is Nothing Then
+    On Error Resume Next
+    treMain.Nodes.Remove Node.Child.index
+    Err.Clear
+    On Error GoTo 0
+Else
+    LoadData nodeRoot.Key, VBComponent.CodeModule.Lines(1, 9999999)
+End If
+treMain.Visible = True
+Debug.Print "End Paint: " & Now()
+End Sub
+
+Private Sub treMain_MouseMove(Button As Integer, Shift As Integer, x As Single, y As Single)
+Dim aNode As MSComctlLib.Node
+    Set aNode = treMain.HitTest(x, y)
+    If aNode Is Nothing Then
+        treMain.ToolTipText = vbNullString
+    Else
+        treMain.ToolTipText = aNode.Tag
+    End If
+End Sub
+
+Private Sub treMain_MouseUp(Button As Integer, Shift As Integer, x As Single, y As Single)
+Dim aNode As MSComctlLib.Node
+Dim Key As String
+Dim menuBarItem As Object
+    d_x2 = x
+    d_y2 = y
+'here we create the context menu
+If Button = 2 Then
+    'create menu depending on selected item
+    c_menu.Clear
+    Set aNode = treMain.HitTest(x, y)
+    If aNode Is Nothing Then
+        Set aNode = treMain.HitTest(treMain.Width / 2, y)
+        If aNode Is Nothing Then
+            Set aNode = treMain.HitTest(treMain.Width / 4, y)
+            If aNode Is Nothing Then
+                'hit nothing, so in clear space, use selected item
+                Set aNode = treMain.SelectedItem
+            End If
+        End If
+    End If
+    If Not aNode Is Nothing Then Key = aNode.Key
+    If left$(Key, 8) = "Project~" Then
+        LoadProjectMenu Key
+    ElseIf left$(Key, 5) = "Type~" Then
+        LoadDefaultMenu Key
+    ElseIf IsNumeric(right$(Key, 1)) Then
+        LoadSubMenu Key, aNode.Parent.Key
+    ElseIf Len(Key) > 0 Then
+        LoadTypeMenu Key, aNode.Parent.Key
+    Else
+        LoadDefaultMenu ""
+    End If
+    On Error Resume Next
+    Err.Clear
+    Set menuBarItem = VBInstance.CommandBars("Menu Bar").Controls("Project")
+    c_menu.AddItem "&Form", , , c_menu.IndexForKey("ProjectAdd"), , , menuBarItem.Controls("Add Form").Enabled, "AddForm"
+    c_menu.AddItem "MD&I Form", , , c_menu.IndexForKey("ProjectAdd"), , , menuBarItem.Controls("Add MDI Form").Enabled, "AddMDIForm"
+    c_menu.AddItem "&Class Module", , , c_menu.IndexForKey("ProjectAdd"), , , menuBarItem.Controls("Add Class Module").Enabled, "AddClass"
+    c_menu.AddItem "&User Control", , , c_menu.IndexForKey("ProjectAdd"), , , menuBarItem.Controls("Add User Control").Enabled, "AddUserControl"
+    c_menu.AddItem "&Property Page", , , c_menu.IndexForKey("ProjectAdd"), , , menuBarItem.Controls("Add Property Page").Enabled, "AddPropertyPage"
+    c_menu.AddItem "User &Document", , , c_menu.IndexForKey("ProjectAdd"), , , menuBarItem.Controls("Add User Document").Enabled, "AddUserDocument"
+    'c_menu.AddItem "&Add File", , , c_menu.IndexForKey("ProjectAdd"), , , , "AddFile"
+    On Error GoTo 0
+    
+    Dim tPT As POINTAPI
+    tPT.x = (treMain.left + x) / Screen.TwipsPerPixelX
+    tPT.y = (treMain.left + y) / Screen.TwipsPerPixelY
+    mAPIAndCallbacks.ClientToScreen treMain.hWnd, tPT
+    c_menu.ShowPopupAbsolute tPT.x, tPT.y
+End If
+End Sub
+Private Sub LoadProjectMenu(strKey As String)
+c_menu.Clear
+If left$(strKey, 8) = "Project~" Then
+    c_menu.AddItem "Set As Start &Up", , tNodes(strKey).index, , , , , "ProjectSetStartup"
+    c_menu.AddItem "-"
+End If
+c_menu.AddItem "Sa&ve Project", , tNodes(strKey).index, , , , , "ProjectSave"
+c_menu.AddItem "-"
+c_menu.AddItem "&Add", , , , , , , "ProjectAdd"
+c_menu.AddItem "-"
+c_menu.AddItem "&Hide", , , , , , , "Hide"
+End Sub
+Private Sub LoadSubMenu(strKey As String, strType As String)
+Dim index As Long
+index = 0
+While IsNumeric(right$(strKey, index + 1))
+    index = index + 1
+Wend
+LoadTypeMenu Mid$(strKey, 2, InStr(1, strKey, "@", vbBinaryCompare) - 2), strType
+c_menu.InsertItem "&Goto Line " & CLng(right$(strKey, index)) + 1, "", "ProjectAdd", , , , , "Goto:" & strKey
+c_menu.InsertItem "-", "Goto:" & strKey
+End Sub
+Private Sub LoadDefaultMenu(strKey As String)
+c_menu.Clear
+LoadProjectMenu strKey
+End Sub
+Private Sub LoadTypeMenu(strKey As String, strType As String)
+Dim itemName As String
+Dim menuBarItem As Object
+
+c_menu.Clear
+
+    Set menuBarItem = VBInstance.CommandBars("Menu Bar").Controls("View")
+    c_menu.AddItem "View O&bject", , tNodes(strKey).index, , , , menuBarItem.Controls("Object").Enabled, "Object"
+    c_menu.AddItem "View C&ode", , tNodes(strKey).index, , , , menuBarItem.Controls("Code").Enabled, "Code"
+    c_menu.AddItem "-"
+    c_menu.AddItem "Prope&rties", , , , , , menuBarItem.Controls("Properties Window").Enabled, "Properties"
+    c_menu.AddItem "-"
+c_menu.AddItem "&Add", , , , , , , "ProjectAdd"
+c_menu.AddItem "-"
+c_menu.AddItem "&Remove " & Split(strKey, "~")(0), , tNodes(strKey).index, , , , , "Remove"
+c_menu.AddItem "-"
+c_menu.AddItem "&Hide", , , , , , , "Hide"
+
+End Sub
+
+Private Sub OpenNode(ByVal Node As MSComctlLib.Node, Optional b_expand As Boolean = True)
+Dim Key As String
+Dim lineID As Long
+Dim index As Long
+Dim theNode As MSComctlLib.Node
+Dim VBComponent As VBIDE.VBComponent
+Dim b_codepane As Boolean
+
+Set theNode = Node
+Key = theNode.Key
+If left$(Key, 5) = "Type~" Then
+    cmdCode.Enabled = False
+    cmdForm.Enabled = False
+    Exit Sub
+ElseIf left$(Key, 8) = "Project~" Then
+    cmdCode.Enabled = False
+    cmdForm.Enabled = False
+    Exit Sub
+End If
+index = 0
+While IsNumeric(right$(Key, index + 1))
+    index = index + 1
+Wend
+
+'here we select the component
+    On Error Resume Next
+    Do While Not ((left$(theNode.Parent.Key, 8) = "Project~") Or (left$(theNode.Parent.Key, 5) = "Type~"))
+        If Err.Number <> 0 Then
+            Err.Clear
+            Exit Do
+        End If
+        Set theNode = theNode.Parent
+    Loop
+    cmdCode.Enabled = True
+    b_codepane = False
+    Select Case LCase$(Split(theNode.Parent.Key, "~")(1))
+        Case "unknown":
+            cmdForm.Enabled = False
+            cmdCode.Enabled = False
+        Case "class modules"
+            cmdForm.Enabled = False
+        Case "user documents"
+            cmdForm.Enabled = True
+            b_codepane = True
+        Case "forms"
+            cmdForm.Enabled = True
+            b_codepane = True
+        Case "property pages"
+            cmdForm.Enabled = True
+            b_codepane = True
+        Case "related documents"
+            cmdForm.Enabled = False
+            cmdCode.Enabled = False
+        Case "modules"
+            cmdForm.Enabled = False
+        Case "user controls"
+            cmdForm.Enabled = True
+            b_codepane = True
+        Case "resource files"
+            cmdForm.Enabled = True
+        Case "designers"
+            cmdForm.Enabled = True
+            b_codepane = True
+        Case Else
+            cmdForm.Enabled = True
+    End Select
+    Err.Clear
+    Key = Split(theNode.Key, "~")(0)
+    Set VBComponent = VBInstance.VBProjects(Split(theNode.Key, "~")(1)).VBComponents(Key)
+    If VBComponent Is Nothing Then
+        Err.Clear
+        On Error GoTo 0
+        Exit Sub
+    End If
+    If GetComponentName(VBComponent) = Key Then
+        If b_codepane And b_expand Then
+            VBComponent.CodeModule.CodePane.Show
+        ElseIf b_expand Then
+            VBComponent.Activate
+        End If
+        On Error Resume Next
+        If index > 0 Then
+            If VBInstance.ActiveCodePane.CodeModule = VBComponent.CodeModule Then
+                lineID = Abs(CLng(right$(Node.Key, index))) + 1
+                VBInstance.ActiveCodePane.SetSelection lineID, 1, lineID, 1
+            End If
+        End If
+        Err.Clear
+        On Error GoTo 0
+    End If
+End Sub
+
+Private Sub treMain_NodeClick(ByVal Node As MSComctlLib.Node)
+'here we need to enable/disable buttons, but not show code/expand nodes
+OpenNode Node, False
+End Sub
+
+
+Private Sub UserDocument_Initialize()
+    Set c_menu = New cPopupMenu
+    c_menu.hWndOwner = UserDocument.hWnd
+    treMain.ImageList = ImageList1
+    AttachMessage Me, treMain.hWnd, WM_NOTIFY
+End Sub
+
+Private Sub UserDocument_Resize()
+' Resize the objects relative to the form size
+treMain.Height = UserDocument.ScaleHeight - treMain.top
+treMain.left = UserDocument.ScaleLeft
+treMain.Width = UserDocument.ScaleWidth - UserDocument.ScaleLeft
+End Sub
+
+Private Sub UserDocument_Show()
+    If Not VBInstance Is Nothing Then
+'automatically show the content
+        Reload
+    End If
+End Sub
+
+Private Sub UserDocument_Terminate()
+' Release resources
+Set nodeRoot = Nothing
+Set tNodes = Nothing
+Set nodeStart = Nothing
+Set nodeLine = Nothing
+Set d_components = Nothing
+DetachMessage Me, treMain.hWnd, WM_NOTIFY
+End Sub
+
+Private Sub compEvents_ItemActivated(ByVal VBComponent As VBIDE.VBComponent)
+'move to relevant node
+Dim aNode As MSComctlLib.Node
+On Error Resume Next
+Set aNode = tNodes.Item(GetComponentName(VBComponent) & "~" & VBComponent.Collection.Parent.Name & "~")
+If aNode Is Nothing Then
+    Err.Clear
+    On Error GoTo 0
+    Exit Sub
+End If
+If Not aNode.Expanded Then
+    aNode.EnsureVisible
+    aNode.Selected = True
+End If
+End Sub
+
+Private Sub compEvents_ItemAdded(ByVal VBComponent As VBIDE.VBComponent)
+'
+Dim nodetype As String
+Dim aNode As MSComctlLib.Node
+    nodetype = GetNodeType(VBComponent)
+    On Error Resume Next
+    Set aNode = Nothing
+    Set aNode = tNodes("Type~" & nodetype & "~" & VBComponent.Collection.Parent.Name)
+    Err.Clear
+    On Error GoTo 0
+    If aNode Is Nothing Then
+        Set aNode = tNodes.Add(tNodes("Project~" & VBComponent.Collection.Parent.Name), tvwChild, "Type" & nodetype & "~" & VBComponent.Collection.Parent.Name, nodetype)
+    End If
+    AddComponent GetComponentName(VBComponent), GetNodeType(VBComponent), VBComponent.Collection.Parent.Name
+End Sub
+
+Private Sub compEvents_ItemReloaded(ByVal VBComponent As VBIDE.VBComponent)
+'
+If tNodes.Item(GetComponentName(VBComponent) & "~" & VBComponent.Collection.Parent.Name & "~").Expanded Then
+    tNodes.Item(GetComponentName(VBComponent) & "~" & VBComponent.Collection.Parent.Name & "~").Expanded = False
+    treMain_Expand tNodes.Item(GetComponentName(VBComponent) & "~" & VBComponent.Collection.Parent.Name & "~")
+End If
+End Sub
+
+Private Sub compEvents_ItemRemoved(ByVal VBComponent As VBIDE.VBComponent)
+RemoveComponent GetComponentName(VBComponent), VBComponent.Collection.Parent.Name
+End Sub
+
+Private Sub compEvents_ItemRenamed(ByVal VBComponent As VBIDE.VBComponent, ByVal OldName As String)
+'this is not right
+RemoveComponent OldName, VBComponent.Collection.Parent.Name
+AddComponent GetComponentName(VBComponent), GetNodeType(VBComponent), VBComponent.Collection.Parent.Name
+End Sub
+
+Private Sub compEvents_ItemSelected(ByVal VBComponent As VBIDE.VBComponent)
+'do nothing
+End Sub
+
+Private Sub RemoveComponent(ComponentName As String, ProjectName As String)
+On Error Resume Next
+    tNodes.Remove ComponentName & "~" & ProjectName & "~"
+    d_components.Remove ComponentName & "~" & ProjectName & "~"
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+Private Sub AddComponent(ComponentName As String, TypeName As String, ProjectName As String)
+Dim aNode As MSComctlLib.Node
+Dim nodeKey As String
+
+nodeKey = ComponentName & "~" & ProjectName & "~"
+If tNodes Is Nothing Then
+    Set tNodes = treMain.Nodes
+End If
+On Error Resume Next
+Set aNode = tNodes("Type~" & TypeName & "~" & ProjectName)
+If aNode Is Nothing Then
+    Set aNode = tNodes.Add(tNodes("Project~" & ProjectName), tvwChild, "Type~" & TypeName & "~" & ProjectName, TypeName, 1, 1)
+End If
+Set aNode = aNode.Child
+Do While Not aNode Is Nothing
+    If aNode.Next Is Nothing Then
+        If aNode.Key < nodeKey Then
+            Set aNode = tNodes.Add(aNode, tvwNext, nodeKey, ComponentName, 2, 2)
+        Else
+            Set aNode = tNodes.Add(aNode, tvwPrevious, nodeKey, ComponentName, 2, 2)
+        End If
+        Set aNode = tNodes.Add(aNode, tvwChild, "Code - " & nodeKey, "Code List")
+        Exit Sub
+    ElseIf aNode.Next.Key < nodeKey Then
+        Set aNode = aNode.Next
+    Else
+        Exit Do
+    End If
+Loop
+If aNode Is Nothing Then
+    Set aNode = tNodes.Add(tNodes("Type~" & TypeName & "~" & ProjectName), tvwChild, nodeKey, ComponentName, 2, 2)
+Else
+    Set aNode = tNodes.Add(aNode, tvwNext, nodeKey, ComponentName, 2, 2)
+End If
+Set aNode = tNodes.Add(aNode, tvwChild, "Code - " & nodeKey, "Code List")
+
+End Sub
+
+Private Function GetComponentName(VBComponent As VBIDE.VBComponent) As String
+If Len(VBComponent.Name) < 1 Then
+    GetComponentName = Mid$(VBComponent.FileNames(1), InStrRev(VBComponent.FileNames(1), "\", , vbBinaryCompare) + 1)
+Else
+    GetComponentName = VBComponent.Name
+End If
+End Function
